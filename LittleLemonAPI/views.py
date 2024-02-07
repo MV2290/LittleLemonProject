@@ -10,6 +10,7 @@ from rest_framework.throttling import UserRateThrottle, AnonRateThrottle
 from rest_framework.exceptions import PermissionDenied
 from django.contrib.auth.models import User, Group
 from functools import wraps
+from decimal import Decimal
 
 # Create your views here.
 class MenuItemsView(generics.ListAPIView, generics.ListCreateAPIView):
@@ -117,46 +118,82 @@ class CategoryView(generics.ListCreateAPIView):
 @api_view(['GET', 'POST', 'DELETE'])
 @permission_classes([IsAuthenticated])
 def CartView(request):
+    user = request.user
     
-    user = request.user  # Get the authenticated user
-
     if request.method == 'GET':
-        # Retrieve the list of available items
-        user_items = Cart.objects.filter(user=user)
-        serializer = CartSerializer(user_items, many=True)
+        carts = Cart.objects.filter(user=user)
+        serializer = CartSerializer(carts, many=True)
         return Response(serializer.data)
 
     elif request.method == 'POST':
-        # Get data from the request
         item_title = request.data.get('item')
         quantity = request.data.get('quantity', 1)  # Default to 1 if quantity is not provided
-
+        
         # Validate and save to the cart using the serializer
         try:
             # Get the selected item by title
             item = MenuItem.objects.get(title=item_title)
+            unit_price = item.price
         except MenuItem.DoesNotExist:
             return Response({'message': 'Item not found'}, status=status.HTTP_404_NOT_FOUND)
-
-        serializer = CartSerializer(data={'user': user.id, 'item':item, 'quantity': quantity})
+        
+        data = {
+            'user':user.id, 'item': item.pk, 'quantity': quantity, 'unit_price': unit_price, 'price': unit_price*Decimal(quantity),
+        }
+        serializer = CartSerializer(data=data)
         if serializer.is_valid():
-            serializer.save()
+            serializer.save(user=user)
             return Response(serializer.data, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
     elif request.method == 'DELETE':
-        # Delete all items from the cart for the authenticated user
         Cart.objects.filter(user=user).delete()
         return Response({'message': 'Cart emptied successfully'}, status=status.HTTP_204_NO_CONTENT)
 
-    # Handle invalid requests
     return Response({'message': 'Invalid request'}, status=status.HTTP_400_BAD_REQUEST)
 
-
-class OrderItemView(generics.ListAPIView):
-    queryset = OrderItem.objects.all()
-    serializer_class = OrderItemSerializer
-
-class OrderView(generics.ListAPIView):
-    queryset = Order.objects.all()
-    serializer_class = OrderSerializer
+class OrderView(APIView):
+    def get(self, request, *args, **kwargs):
+        # Get all orders for the current user
+        user = request.user
+        orders = Order.objects.filter(user=user)
+        
+        # Serialize orders
+        serializer = OrderItemSerializer(orders, many=True)
+        
+        return Response(serializer.data)
+    
+    def post(self, request, *args, **kwargs):
+        # Get the current user
+        user = request.user
+        
+        # Retrieve current cart items from the cart endpoints
+        cart_items = Cart.objects.filter(user=user)
+        
+        # Create order items for each cart item
+        order_items = []
+        for cart_item in cart_items:
+            order_item_data = {
+                'order': user.id,
+                'menuitem_id': cart_item.item.id,
+                'quantity': cart_item.quantity,
+                'unit_price': cart_item.unit_price,
+                'price': cart_item.price
+            }
+            order_item_serializer = OrderItemSerializer(data=order_item_data)
+            if order_item_serializer.is_valid():
+                order_item = order_item_serializer.save()
+                order_items.append(order_item)
+            else:
+                return Response(order_item_serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        
+        # Delete all items from the cart for this user
+        cart_items.delete()
+        return Response("Order created successfully. Cart is now empty.", status=status.HTTP_201_CREATED)
+    
+    def delete(self, request, *args, **kwargs):
+        # Delete all order items associated with the current user's orders
+        user = request.user
+        OrderItem.objects.filter(order__user=user).delete()
+        
+        return Response({'message': 'All order items deleted successfully.'}, status=status.HTTP_204_NO_CONTENT)
