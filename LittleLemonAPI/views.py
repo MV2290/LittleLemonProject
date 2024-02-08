@@ -152,17 +152,24 @@ def CartView(request):
 
     return Response({'message': 'Invalid request'}, status=status.HTTP_400_BAD_REQUEST)
 
+
 class OrderView(APIView):
+
+    @permission_classes([IsAuthenticated])
     def get(self, request, *args, **kwargs):
-        # Get all orders for the current user
-        user = request.user
-        orders = Order.objects.filter(user=user)
+        if request.user.groups.filter(name='Manager').exists():
+            orders = OrderItem.objects.all()
+        else:
+            # Get all orders for the current user
+            user = request.user
+            orders = OrderItem.objects.filter(order=user)
         
         # Serialize orders
         serializer = OrderItemSerializer(orders, many=True)
         
         return Response(serializer.data)
     
+    @permission_classes([IsAuthenticated])
     def post(self, request, *args, **kwargs):
         # Get the current user
         user = request.user
@@ -192,8 +199,14 @@ class OrderView(APIView):
         return Response("Order created successfully. Cart is now empty.", status=status.HTTP_201_CREATED)
     
     def delete(self, request, *args, **kwargs):
-        # Delete all order items associated with the current user's orders
-        user = request.user
-        OrderItem.objects.filter(order__user=user).delete()
         
-        return Response({'message': 'All order items deleted successfully.'}, status=status.HTTP_204_NO_CONTENT)
+        order_number = request.data.get('order')
+        
+        if self.request.user.groups.filter(name='Manager').exists():
+            # Get all order items associated with the orders of the order
+            order_items_to_delete = OrderItem.objects.filter(order=order_number)
+            # Delete all found order items
+            order_items_to_delete.delete()
+            return Response({'message': 'All order items deleted successfully.'}, status=status.HTTP_204_NO_CONTENT)
+        else:
+            raise PermissionDenied("Request denied, only Manager users allowed")
