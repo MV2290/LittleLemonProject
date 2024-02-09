@@ -58,9 +58,9 @@ class OrderItemSerializer(serializers.ModelSerializer):
         fields = ['order', 'menuitem_id', 'quantity', 'unit_price', 'price']
 
 
-class OrderSerializer(serializers.ModelSerializer):
-    orderitem_set = OrderItemSerializer(many=True)
+class DeliveryOrderSerializer(serializers.ModelSerializer):
+    order_items = OrderItemSerializer(many=True)
 
     class Meta:
         model = Order
-        fields = ['id','delivery_crew','status','total','date','orderitems_set','user']
+        fields = ['id', 'delivery_crew_user', 'status', 'total', 'date', 'order_items', 'user']

@@ -7,10 +7,11 @@ from .serializer import *
 from rest_framework.views import APIView
 from rest_framework import status
 from rest_framework.throttling import UserRateThrottle, AnonRateThrottle
-from rest_framework.exceptions import PermissionDenied
+from rest_framework.exceptions import PermissionDenied, NotFound
 from django.contrib.auth.models import User, Group
 from functools import wraps
 from decimal import Decimal
+import datetime
 
 # Create your views here.
 class MenuItemsView(generics.ListAPIView, generics.ListCreateAPIView):
@@ -156,12 +157,15 @@ def CartView(request):
 class OrderView(APIView):
 
     @permission_classes([IsAuthenticated])
-    def get(self, request, *args, **kwargs):
-        if request.user.groups.filter(name='Manager').exists():
+    def get(self, request):
+        user = request.user
+        if user.groups.filter(name='Manager').exists():
             orders = OrderItem.objects.all()
+        elif user.groups.filter(name='delivery-crew').exists():
+            # Filter OrderItem instances based on the order and delivery crew
+            delivery_crew = user.pk
+            orders = OrderItem.objects.filter(order__delivery_crew=delivery_crew)
         else:
-            # Get all orders for the current user
-            user = request.user
             orders = OrderItem.objects.filter(order=user)
         
         # Serialize orders
@@ -170,7 +174,7 @@ class OrderView(APIView):
         return Response(serializer.data)
     
     @permission_classes([IsAuthenticated])
-    def post(self, request, *args, **kwargs):
+    def post(self, request):
         # Get the current user
         user = request.user
         
@@ -197,16 +201,47 @@ class OrderView(APIView):
         # Delete all items from the cart for this user
         cart_items.delete()
         return Response("Order created successfully. Cart is now empty.", status=status.HTTP_201_CREATED)
-    
-    def delete(self, request, *args, **kwargs):
-        
-        order_number = request.data.get('order')
+
+class OrderDetailView(APIView):
+   
+    def delete(self, request, orderId):
+        try:
+            order = OrderItem.objects.get(id=orderId)
+        except OrderItem.DoesNotExist:
+            raise NotFound("Order not found")
         
         if self.request.user.groups.filter(name='Manager').exists():
-            # Get all order items associated with the orders of the order
-            order_items_to_delete = OrderItem.objects.filter(order=order_number)
-            # Delete all found order items
-            order_items_to_delete.delete()
+            order.delete()
             return Response({'message': 'All order items deleted successfully.'}, status=status.HTTP_204_NO_CONTENT)
         else:
             raise PermissionDenied("Request denied, only Manager users allowed")
+        
+    def put(self, request, orderId):
+        # Check if the user is a manager
+        if not request.user.groups.filter(name='Manager').exists():
+            raise PermissionDenied("Only managers can assign orders")
+
+        # Get the delivery crew user from the "delivery crew" group
+        try:
+            delivery_crew_user = User.objects.filter(groups__name='delivery crew').first()
+        except User.DoesNotExist:
+            return Response({"message": "No delivery crew available"}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Get or create the Order object
+        order, created = Order.objects.get_or_create(id=orderId)
+        order_items = OrderItem.objects.filter(order=order)
+        # If the order was just created, you may need to set other fields as well
+        if created:
+            # Set other fields here if necessary
+            pass
+        total_price = sum(item.price for item in order_items)
+
+        # Assign the order to the delivery crew
+        order.delivery_crew_user = delivery_crew_user
+        order.total = total_price
+        #order.save()
+
+        # Serialize and return the updated order
+        serializer = DeliveryOrderSerializer(order)
+        return Response(serializer.data)
+ 
