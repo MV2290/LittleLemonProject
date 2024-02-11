@@ -11,7 +11,7 @@ from rest_framework.exceptions import PermissionDenied, NotFound
 from django.contrib.auth.models import User, Group
 from functools import wraps
 from decimal import Decimal
-import datetime
+from datetime import datetime, timedelta
 
 # Create your views here.
 class MenuItemsView(generics.ListAPIView, generics.ListCreateAPIView):
@@ -166,7 +166,10 @@ class OrderView(APIView):
             delivery_crew = user.pk
             orders = OrderItem.objects.filter(order__delivery_crew=delivery_crew)
         else:
-            orders = OrderItem.objects.filter(order=user)
+            try:
+                orders = OrderItem.objects.filter(order=user)
+            except:
+                return Response({"No user provided"}, status=status.HTTP_400_BAD_REQUEST)
         
         # Serialize orders
         serializer = OrderItemSerializer(orders, many=True)
@@ -203,8 +206,18 @@ class OrderView(APIView):
         return Response("Order created successfully. Cart is now empty.", status=status.HTTP_201_CREATED)
 
 class OrderDetailView(APIView):
-   
-    def delete(self, request, orderId):
+
+    @permission_classes([IsAuthenticated])
+    def get(self, reqeust, orderId):
+        try:
+            order_item = OrderItem.objects.get(id=orderId)
+        except OrderItem.DoesNotExist:
+            return Response({"message": "OrderItem not found"}, status=status.HTTP_404_NOT_FOUND)
+             
+        serializer = OrderItemSerializer(order_item)
+        return Response(serializer.data)
+    
+    def delete(self, orderId):
         try:
             order = OrderItem.objects.get(id=orderId)
         except OrderItem.DoesNotExist:
@@ -216,32 +229,65 @@ class OrderDetailView(APIView):
         else:
             raise PermissionDenied("Request denied, only Manager users allowed")
         
-    def put(self, request, orderId):
+    def post(self, request, orderId):
         # Check if the user is a manager
         if not request.user.groups.filter(name='Manager').exists():
-            raise PermissionDenied("Only managers can assign orders")
+            raise PermissionDenied("Only managers can create orders")
 
-        # Get the delivery crew user from the "delivery crew" group
-        try:
-            delivery_crew_user = User.objects.filter(groups__name='delivery crew').first()
-        except User.DoesNotExist:
+        # Logic to assign a delivery crew user (you may need to customize this logic)
+        delivery_crew_user = User.objects.filter(groups__name='delivery-crew').first()
+        if delivery_crew_user is None:
             return Response({"message": "No delivery crew available"}, status=status.HTTP_400_BAD_REQUEST)
+        
+        # Retrieve order items as a queryset
+        order_items_queryset = OrderItem.objects.filter(id=orderId)
 
-        # Get or create the Order object
-        order, created = Order.objects.get_or_create(id=orderId)
-        order_items = OrderItem.objects.filter(order=order)
-        # If the order was just created, you may need to set other fields as well
-        if created:
-            # Set other fields here if necessary
-            pass
-        total_price = sum(item.price for item in order_items)
+        # Calculate the total price of the order based on the prices of the order items
+        total_price = sum(order_item.price for order_item in order_items_queryset)
+        
+        # Retrieve the user associated with the order
+        user = order_items_queryset.first().order  # Assuming all order items belong to the same user
 
-        # Assign the order to the delivery crew
-        order.delivery_crew_user = delivery_crew_user
-        order.total = total_price
-        #order.save()
+        # Calculate delivery date (today plus one week)
+        delivery_date = datetime.now() + timedelta(weeks=1)
 
-        # Serialize and return the updated order
-        serializer = DeliveryOrderSerializer(order)
-        return Response(serializer.data)
+        # Extract only the date part from the delivery_date
+        delivery_date_date = delivery_date.date()
+
+        # Prepare the data for creating the order
+        order_data = {
+            'user': user.id,
+            'delivery_crew_user': delivery_crew_user.id,
+            'status': request.data.get('status'),
+            'total': total_price,
+            'date': delivery_date_date,
+        }
+
+        # Serialize the order data
+        serializer = DeliveryOrderSerializer(data=order_data)
+        if serializer.is_valid():
+            order_instance = serializer.save()
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+    def patch(self, request, orderId):
+        # Retrieve the order item
+        try:
+            order_item = OrderItem.objects.get(id=orderId)
+        except OrderItem.DoesNotExist:
+            return Response({"message": "OrderItem not found"}, status=status.HTTP_404_NOT_FOUND)
+        
+        # Check if the user is part of the delivery crew
+        if request.user.groups.filter(name='delivery-crew').exists():
+            # Extract the status from the request data
+            status_value = int(request.data.get('status'))
+            if status_value in [0, 1]:  # Ensure status is either 0 or 1
+                order_item.status = status_value
+                order_item.save()
+                serializer = OrderItemSerializer(order_item)
+                return Response(serializer.data)
+            else:
+                return Response({"message": "Invalid status value. Status must be either 0 or 1."}, status=status.HTTP_400_BAD_REQUEST)
+        else:
+            return Response({"message": "Only delivery crew users are allowed to update order status."}, status=status.HTTP_403_FORBIDDEN)
  
