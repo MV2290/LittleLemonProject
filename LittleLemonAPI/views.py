@@ -55,7 +55,7 @@ def group_required(group_name):
         return wrapper
     return decorator
 
-@api_view(['GET', 'POST', 'DELETE'])
+@api_view(['GET', 'POST'])
 @permission_classes([IsAuthenticated])
 @group_required('Manager')
 def list_group_members(request, group_name):
@@ -84,22 +84,23 @@ def list_group_members(request, group_name):
         else:
             return Response("Username not provided in the request data", status=status.HTTP_400_BAD_REQUEST)
 
-    elif request.method == 'DELETE':
-        # Remove a member from the group
-        username = request.data.get('username', None)
-        if username:
-            User = get_user_model()
-            try:
-                user = User.objects.get(username=username)
-                group.user_set.remove(user)
-                return Response(f"User '{user.username}' removed from group '{group_name}'", status=status.HTTP_200_OK)
-            except User.DoesNotExist:
-                return Response(f"User with username '{username}' not found", status=status.HTTP_404_NOT_FOUND)
+@api_view(['DELETE'])
+@permission_classes([IsAuthenticated])
+@group_required('Manager')
+def remove_user_from_group(request, group_name, user_id):
+    User = get_user_model()
+    try:
+        user = User.objects.get(pk=user_id)
+        group = Group.objects.get(name=group_name)
+        if user in group.user_set.all():
+            group.user_set.remove(user)
+            return Response(f"User '{user.username}' removed from group '{group_name}'", status=status.HTTP_200_OK)
         else:
-            return Response("Username not provided in the request data", status=status.HTTP_400_BAD_REQUEST)
-
-    else:
-        return Response("Invalid HTTP method", status=status.HTTP_400_BAD_REQUEST)
+            return Response(f"User '{user.username}' is not a member of group '{group_name}'", status=status.HTTP_400_BAD_REQUEST)
+    except User.DoesNotExist:
+        return Response(f"User with ID '{user_id}' not found", status=status.HTTP_404_NOT_FOUND)
+    except Group.DoesNotExist:
+        return Response(f"Group with name '{group_name}' not found", status=status.HTTP_404_NOT_FOUND)
 
 class CategoryView(generics.ListCreateAPIView):
     queryset = Category.objects.all()
