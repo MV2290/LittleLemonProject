@@ -7,17 +7,20 @@ from .serializer import *
 from rest_framework.views import APIView
 from rest_framework import status
 from rest_framework.throttling import UserRateThrottle, AnonRateThrottle
+from rest_framework.filters import OrderingFilter, SearchFilter
 from rest_framework.exceptions import PermissionDenied, NotFound
 from django.contrib.auth.models import User, Group
 from functools import wraps
 from decimal import Decimal
 from datetime import datetime, timedelta
 
+
 # Create your views here.
 class MenuItemsView(generics.ListAPIView, generics.ListCreateAPIView):
     queryset = MenuItem.objects.all()
     serializer_class = MenuItemSerializer
     ordering_fields = ['price']
+    filter_backends = [OrderingFilter, SearchFilter]
     search_fields = ['title']
     throttle_classes = [AnonRateThrottle, UserRateThrottle]
     def get_permissions(self):
@@ -88,6 +91,7 @@ def list_group_members(request, group_name):
 @permission_classes([IsAuthenticated])
 @group_required('Manager')
 def remove_user_from_group(request, group_name, user_id):
+    throttle_classes = [AnonRateThrottle, UserRateThrottle]
     User = get_user_model()
     try:
         user = User.objects.get(pk=user_id)
@@ -121,7 +125,7 @@ class CategoryView(generics.ListCreateAPIView):
 @permission_classes([IsAuthenticated])
 def CartView(request):
     user = request.user
-    
+    throttle_classes = [AnonRateThrottle, UserRateThrottle]
     if request.method == 'GET':
         carts = Cart.objects.filter(user=user)
         serializer = CartSerializer(carts, many=True)
@@ -156,7 +160,10 @@ def CartView(request):
 
 
 class OrderView(APIView):
-
+    ordering_fields = ['order']
+    filter_backends = [OrderingFilter, SearchFilter]
+    search_fields = ['order']
+    throttle_classes = [AnonRateThrottle, UserRateThrottle]
     @permission_classes([IsAuthenticated])
     def get(self, request):
         user = request.user
@@ -207,7 +214,7 @@ class OrderView(APIView):
         return Response("Order created successfully. Cart is now empty.", status=status.HTTP_201_CREATED)
 
 class OrderDetailView(APIView):
-
+    throttle_classes = [AnonRateThrottle, UserRateThrottle]
     @permission_classes([IsAuthenticated])
     def get(self, reqeust, orderId):
         try:
